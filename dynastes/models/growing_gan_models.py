@@ -73,3 +73,26 @@ class GrowingGanGenerator(tfk.Model):
 
     def call(self, inputs, lod=None, training=None, mask=None, context=None):
         """ Implement this """
+
+
+"""
+    Discriminator pseudo-tf-function:
+    @tf.function
+    def get_scores_ag(images_in, lod_in):
+    
+      def grow(res, lod):
+        x = fromrgb(res, downscale2d(images_in, 2**lod))
+        if lod > 0:
+          if lod_in < lod:
+            x = grow(res+1, lod-1)
+        x = disc_block(x, res)
+        if res > 2:
+          if lod_in > lod:
+            return lerp(x, fromrgb(downscale2d(images_in, 2**(lod+1)), res-1), lod_in - lod)
+          else:
+            return x
+        else:
+          return x
+    
+      return grow(2, resolution_log_2 - 2)
+"""
