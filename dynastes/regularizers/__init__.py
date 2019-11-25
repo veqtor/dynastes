@@ -22,12 +22,16 @@ class ModifyingRegularizer(Regularizer):
                  fn,
                  **kwargs):
         super(ModifyingRegularizer).__init__(**kwargs)
-        self.first = first
-        self.second = second
+        self.first = get(first)
+        self.second = get(second)
         self.fn = fn
 
     def __call__(self, x):
         return self.fn(self.first(x), self.second(x))
+
+    def get_config(self):
+        return {'first': serialize(self.first),
+                'second': serialize(self.second)}
 
 
 def _add(self, other):
