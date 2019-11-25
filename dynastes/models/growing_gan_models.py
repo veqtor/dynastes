@@ -15,7 +15,36 @@ def _call_masked(layer, inputs, training=None, mask=None, **kwargs):
     return out, out_mask
 
 
-class GrowingGanGenerator(tfk.Model, abc.ABC):
+class GrowingGanModel(tfk.Model, abc.ABC):
+    @abc.abstractmethod
+    def interpolate_domain(self, x, y, interp):
+        """
+        Return result of interpolating between domains
+        """
+
+    @staticmethod
+    def interpolate_mask(x_mask, y_mask, interp):
+
+        @tf.function
+        def interp_masks(_x_mask, _y_mask, _interp):
+
+            if _interp <= 0.:
+                return _x_mask
+            elif _interp >= 1.:
+                return _y_mask
+            else:
+                return tf.math.logical_and(_x_mask, _y_mask)
+
+        if x_mask is None:
+            return y_mask
+        else:
+            if y_mask is None:
+                return x_mask
+            else:
+                return interp_masks(x_mask, y_mask, interp)
+
+
+class GrowingGanGenerator(GrowingGanModel, abc.ABC):
     def __init__(self,
                  n_lods=0,
                  **kwargs):
@@ -54,33 +83,6 @@ class GrowingGanGenerator(tfk.Model, abc.ABC):
     """
 
     @abc.abstractmethod
-    def interpolate_domain(self, x, y, interp):
-        """
-        Return result of interpolating between domains
-        """
-
-    @staticmethod
-    def interpolate_mask(x_mask, y_mask, interp):
-
-        @tf.function
-        def interp_masks(_x_mask, _y_mask, _interp):
-
-            if _interp <= 0.:
-                return _x_mask
-            elif _interp >= 1.:
-                return _y_mask
-            else:
-                return tf.math.logical_and(_x_mask, _y_mask)
-
-        if x_mask is None:
-            return y_mask
-        else:
-            if y_mask is None:
-                return x_mask
-            else:
-                return interp_masks(x_mask, y_mask, interp)
-
-    @abc.abstractmethod
     def get_gan_layer(self, lod) -> tfkl.Layer:
         """ Return processing block here """
 
@@ -105,7 +107,7 @@ class GrowingGanGenerator(tfk.Model, abc.ABC):
         the "domain" space
 
         caveats:
-        Possibly you might have to perform cumsum
+        Possibly you might have to perform cumprod
         on hparams strides, depending on your architecture
         if it's a simple one, you might just return Upsampling2D here
 
@@ -204,7 +206,7 @@ class GrowingGanGenerator(tfk.Model, abc.ABC):
         @param kwargs: optional arguments passed to every layer on call
         """
 
-        lod_in = tf.maximum(0., tf.minimum(self.n_lods - 1, (self.n_lods-1) - tf.convert_to_tensor(lod_in)))
+        lod_in = tf.maximum(0., tf.minimum(self.n_lods - 1, (self.n_lods - 1) - tf.convert_to_tensor(lod_in)))
 
         if mask is None:
             return self._get_output(inputs=inputs,
@@ -218,24 +220,99 @@ class GrowingGanGenerator(tfk.Model, abc.ABC):
                                            mask=mask, **kwargs)
 
 
-"""
-    Discriminator pseudo-tf-function:
+class GrowingGanClassifier(GrowingGanModel, abc.ABC):
+    def __init__(self,
+                 n_lods=0,
+                 **kwargs):
+        super(GrowingGanClassifier, self).__init__(**kwargs)
+        self.n_lods = n_lods
+
+    @abc.abstractmethod
+    def get_gan_layer(self, lod) -> tfkl.Layer:
+        """ Return processing block here """
+
+    @abc.abstractmethod
+    def get_from_domain_layer(self, lod) -> tfkl.Layer:
+        """
+        Return a layer that transforms input from
+        domain into one that can consumed by gan_layer at
+        this lod_in.
+        The domain should be the same for every
+        lod_in, but doesn't need to be RGB etc, if
+        such a conversion is handled by the layer returned
+        by get_conform_to_output_layer()
+        Lerping between lods is handled in this "domain"
+        """
+
+    @abc.abstractmethod
+    def get_downscale_domain_layer(self, input_lod, output_lod) -> tfkl.Layer:
+        """
+        Return a layer that scales input from input_lod
+        to output lod_in dimensions, this happens in
+        the "domain" space
+
+        caveats:
+        Possibly you might have to perform cumprod
+        on hparams strides, depending on your architecture
+        if it's a simple one, you might just return AveragePooling2D here
+
+        """
+
+    @abc.abstractmethod
+    def get_input_transform_layer(self, lod) -> tfkl.Layer:
+        """
+        Return a layer that scales/transforms input
+        to domain @ lod
+        """
+
     @tf.function
-    def get_scores_ag(images_in, lod_in):
-    
-      def grow(res, lod_in):
-        x = fromrgb(res, downscale2d(images_in, 2**lod_in))
-        if lod_in > 0:
-          if lod_in < lod_in:
-            x = grow(res+1, lod_in-1)
-        x = disc_block(x, res)
-        if res > 2:
-          if lod_in > lod_in:
-            return lerp(x, fromrgb(downscale2d(images_in, 2**(lod_in+1)), res-1), lod_in - lod_in)
-          else:
-            return x
-        else:
-          return x
-    
-      return grow(2, resolution_log_2 - 2)
-"""
+    def _get_predictions(self, inputs, lod_in, training=None, **kwargs):
+
+        def grow(cls: GrowingGanClassifier, current_lod):
+            lods_left = cls.n_lods - (current_lod + 1)
+
+            def get_inputs_at_domain_lod():
+                inputs_at_lod = cls.get_input_transform_layer(current_lod)(inputs=inputs,
+                                                                           training=training,
+                                                                           **kwargs)
+                x = cls.get_from_domain_layer(current_lod)(inputs=inputs_at_lod,
+                                                           training=training,
+                                                           **kwargs)
+                return x
+
+            if lods_left > 0:
+                if lod_in < lods_left:
+                    x = grow(cls, current_lod+1)
+                else:
+                    x = get_inputs_at_domain_lod()
+            else:
+                x = get_inputs_at_domain_lod()
+            x = cls.get_gan_layer(current_lod)(inputs=x,
+                                               training=training,
+                                               **kwargs)
+            if lod_in > lods_left:
+                inputs_at_next_lod = cls.get_input_transform_layer(current_lod - 1)(inputs=inputs,
+                                                                                    training=training,
+                                                                                    **kwargs)
+                next_x = cls.get_from_domain_layer(current_lod - 1)(inputs=inputs_at_next_lod,
+                                                                    training=training,
+                                                                    **kwargs)
+                return cls.interpolate_domain(x, next_x, lod_in - lods_left)
+            else:
+                return x
+
+        return grow(self, current_lod=0)
+
+    def call(self, inputs, lod_in=None, training=None, mask=None, **kwargs):
+        """
+        @param lod_in: value between 0. and self.n_lods-1
+        @param kwargs: optional arguments passed to every layer on call
+        """
+
+        lod_in = tf.maximum(0., tf.minimum(self.n_lods - 1, (self.n_lods - 1) - tf.convert_to_tensor(lod_in)))
+
+        if mask is None:
+            return self._get_predictions(inputs=inputs,
+                                    lod_in=lod_in,
+                                    training=training,
+                                    **kwargs)
