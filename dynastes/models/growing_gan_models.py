@@ -2,21 +2,17 @@ import abc
 
 import tensorflow as tf
 import tensorflow.keras as tfk
+import tensorflow.keras.layers as tfkl
 
 
-class GanLayer(tfk.layers.Layer, abc.ABC):
-
-    @abc.abstractmethod
-    def call(self, inputs, training=None, mask=None, context=None):
-        """ This method is called by the generator """
-
-    def cmask(self, inputs, training=None, mask=None, context=None):
-        out = self(inputs, training=training, mask=mask, context=context)
-        if self.supports_masking:
-            out_mask = self.compute_mask(inputs, mask)
-        else:
-            out_mask = mask
-        return out, out_mask
+def _call_masked(layer, inputs, training=None, mask=None, **kwargs):
+    if layer.supports_masking:
+        out = layer(inputs, training=training, mask=mask, **kwargs)
+        out_mask = layer.compute_mask(inputs, mask, **kwargs)
+    else:
+        out = layer(inputs, training=training, **kwargs)
+        out_mask = mask
+    return out, out_mask
 
 
 class GrowingGanGenerator(tfk.Model, abc.ABC):
@@ -85,11 +81,11 @@ class GrowingGanGenerator(tfk.Model, abc.ABC):
                 return interp_masks(x_mask, y_mask, interp)
 
     @abc.abstractmethod
-    def get_gan_layer(self, lod) -> GanLayer:
+    def get_gan_layer(self, lod) -> tfkl.Layer:
         """ Return processing block here """
 
     @abc.abstractmethod
-    def get_to_domain_layer(self, lod) -> GanLayer:
+    def get_to_domain_layer(self, lod) -> tfkl.Layer:
         """
         Return a layer that transforms output of
         gan_layer at this lod_in into a tensor that
@@ -102,7 +98,7 @@ class GrowingGanGenerator(tfk.Model, abc.ABC):
         """
 
     @abc.abstractmethod
-    def get_upscale_domain_layer(self, input_lod, output_lod) -> GanLayer:
+    def get_upscale_domain_layer(self, input_lod, output_lod) -> tfkl.Layer:
         """
         Return a layer that scales input from input_lod
         to output lod_in dimensions, this happens in
@@ -116,42 +112,83 @@ class GrowingGanGenerator(tfk.Model, abc.ABC):
         """
 
     @abc.abstractmethod
-    def get_conform_to_output_layer(self, input_lod) -> GanLayer:
+    def get_conform_to_output_layer(self, input_lod) -> tfkl.Layer:
         """
         Return a layer that scales/transforms input @ input_lod
         to conform exactly to targets
         """
 
     @tf.function
-    def _get_output(self, inputs, lod_in=None, training=None, mask=None, context=None):
+    def _get_output(self, inputs, lod_in=None, training=None, **kwargs):
+
+        def grow(gen: GrowingGanGenerator, x, current_lod):
+
+            y_layer = gen.get_gan_layer(current_lod)
+            y = y_layer(x, training=training, **kwargs)
+
+            lods_left = gen.n_lods - (current_lod + 1)
+
+            def get_lod_output(x, y):
+                y_domain = gen.get_to_domain_layer(current_lod)(y, training=training, **kwargs)
+
+                if lod_in > lods_left:
+
+                    x_domain = gen.get_to_domain_layer(current_lod - 1)(x, training=training, **kwargs)
+
+                    x_as_y_domain = gen.get_upscale_domain_layer(current_lod - 1, current_lod)(x_domain,
+                                                                                               training=training,
+                                                                                               **kwargs)
+
+                    z = gen.interpolate_domain(y_domain, x_as_y_domain, lod_in - lods_left)
+                else:
+                    z = y_domain
+
+                return gen.get_conform_to_output_layer(current_lod)(z, training=training, **kwargs)
+
+            if lods_left > 0:
+                if lod_in < lods_left:
+                    return grow(gen, y, current_lod=current_lod + 1)
+                else:
+                    return get_lod_output(x, y)
+            else:
+                return get_lod_output(x, y)
+
+        return grow(self, x=inputs, current_lod=0)
+
+    @tf.function
+    def _get_output_masked(self, inputs, lod_in=None, training=None, mask=None, **kwargs):
 
         def grow(gen: GrowingGanGenerator, x, current_lod, mask=None):
 
             y_layer = gen.get_gan_layer(current_lod)
-            y, y_mask = y_layer.cmask(x, training=training, mask=mask, context=context)
+            y, y_mask = _call_masked(y_layer, x, training=training, mask=mask, **kwargs)
 
-            lods_left = gen.n_lods - (current_lod)
+            lods_left = gen.n_lods - (current_lod + 1)
 
             def get_lod_output(x, y, y_mask=None, x_mask=None):
                 y_domain_layer = gen.get_to_domain_layer(current_lod)
-                y_domain, y_domain_mask = y_domain_layer.cmask(y, training=training, mask=y_mask, context=context)
+                y_domain, y_domain_mask = _call_masked(y_domain_layer, y, training=training, mask=y_mask, **kwargs)
 
                 if lod_in > lods_left:
 
                     x_domain_layer = gen.get_to_domain_layer(current_lod - 1)
-                    x_domain, x_domain_mask = x_domain_layer.cmask(x, training=training, mask=x_mask, context=context)
+                    x_domain, x_domain_mask = _call_masked(x_domain_layer, x, training=training, mask=x_mask, **kwargs)
 
                     x_to_y_layer = gen.get_upscale_domain_layer(current_lod - 1, current_lod)
-                    x_as_y_domain, x_as_y_mask = x_to_y_layer.cmask(x_domain, training=training, mask=x_domain_mask, context=context)
+                    x_as_y_domain, x_as_y_mask = _call_masked(x_to_y_layer, x_domain, training=training,
+                                                              mask=x_domain_mask, **kwargs)
 
                     z = gen.interpolate_domain(y_domain, x_as_y_domain, lod_in - lods_left)
                     z_mask = gen.interpolate_mask(y_domain_mask, x_as_y_mask, lod_in - lods_left)
                 else:
                     z = y_domain
                     z_mask = y_domain_mask
-                return gen.get_conform_to_output_layer(current_lod)(z, training=training, mask=z_mask, context=context)
 
-            if current_lod < gen.n_lods:
+                r, r_mask = _call_masked(gen.get_conform_to_output_layer(current_lod), z, training=training,
+                                         mask=z_mask, **kwargs)
+                return r
+
+            if lods_left > 0:
                 if lod_in < lods_left:
                     return grow(gen, y, current_lod=current_lod + 1, mask=y_mask)
                 else:
@@ -161,8 +198,24 @@ class GrowingGanGenerator(tfk.Model, abc.ABC):
 
         return grow(self, x=inputs, current_lod=0, mask=mask)
 
-    def call(self, inputs, lod=None, training=None, mask=None, context=None):
-        return self._get_output(inputs=inputs, training=training, mask=mask, context=context)
+    def call(self, inputs, lod_in=None, training=None, mask=None, **kwargs):
+        """
+        @param lod_in: value between 0. and self.n_lods-1
+        @param kwargs: optional arguments passed to every layer on call
+        """
+
+        lod_in = tf.maximum(0., tf.minimum(self.n_lods - 1, (self.n_lods-1) - tf.convert_to_tensor(lod_in)))
+
+        if mask is None:
+            return self._get_output(inputs=inputs,
+                                    lod_in=lod_in,
+                                    training=training,
+                                    **kwargs)
+        else:
+            return self._get_output_masked(inputs=inputs,
+                                           lod_in=lod_in,
+                                           training=training,
+                                           mask=mask, **kwargs)
 
 
 """
