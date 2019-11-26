@@ -411,17 +411,21 @@ class SimpleGrowingGanGenerator(GrowingGanGenerator, abc.ABC):
     def get_upscale_domain_by_range(self, input_idx, output_idx) -> tfkl.Layer:
 
         """
-        Return a "in-domain" upscale layer between your scales, such as:
+        Return a "in-domain" upscale layer between your scales
+        
+        Example:
+
         self.strides = [2,3,3]
         strides = self.strides[input_idx : output_idx]
-        scale = np.cumprod(strides)[-1]
-        if scale == 1:
-            return NOOPLayer()
-        return tfkl.AveragePooling2D((scale, scale), strides=(scale, scale), padding='same')
+        if len(strides) > 0:
+            scale = np.cumprod(strides)[-1]
+            if scale > 1:
+                return tfkl.AveragePooling2D((scale, scale), strides=(scale, scale), padding='same')
+        return NOOPLayer()
 
-        @param input_idx:
+        @param input_idx: starting layer requested 0 ... (n_lods-1)
         @type input_idx: int
-        @param output_idx:
+        @param output_idx: ending layer requested 0 ... (n_lods-1)
         @type output_idx: int
         """
 
