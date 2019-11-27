@@ -4,13 +4,6 @@ import tensorflow as tf
 import tensorflow.keras as tfk
 import tensorflow.keras.layers as tfkl
 
-
-class NOOPLayer(tf.keras.layers.Layer):
-
-    def call(self, inputs, **kwargs):
-        return inputs
-
-
 def _call_masked(layer, inputs, training=None, mask=None, **kwargs):
     if layer.supports_masking:
         out = layer(inputs, training=training, mask=mask, **kwargs)
@@ -356,10 +349,11 @@ class SimpleGrowingGanClassifer(GrowingGanClassifier, abc.ABC):
         Return a "in-domain" downscaling layer between your scales, such as:
         self.strides = [2,3,3]
         strides = self.strides[input_idx : output_idx]
-        scale = np.cumprod(strides)[-1]
-        if scale == 1:
-            return NOOPLayer()
-        return tfkl.AveragePooling2D((scale, scale), strides=(scale, scale), padding='same')
+        if len(strides) > 0:
+            scale = np.cumprod(strides)[-1]
+            if scale > 1:
+                return tfkl.AveragePooling2D((scale, scale), strides=(scale, scale), padding='same')
+        return tfkl.Activation('linear')
 
         @param input_idx:
         @type input_idx: int
@@ -369,9 +363,9 @@ class SimpleGrowingGanClassifer(GrowingGanClassifier, abc.ABC):
 
     def get_downscale_domain_layer_by_lod(self, input_lod, output_lod) -> tfkl.Layer:
         if output_lod == input_lod:
-            return NOOPLayer()
+            return tfkl.Activation('linear')
         if input_lod - output_lod == 1:
-            return NOOPLayer()
+            return tfkl.Activation('linear')
         return self.get_downscale_domain_by_range(self.n_lods - input_lod, self.n_lods - output_lod)
 
     def get_input_transform_layer_by_lod(self, lod) -> tfkl.Layer:
@@ -391,7 +385,7 @@ class SimpleGrowingGanGenerator(GrowingGanGenerator, abc.ABC):
 
     def get_gan_layer_by_lod(self, lod) -> tfkl.Layer:
         if lod > (self.n_lods - 1):
-            return NOOPLayer()
+            return tfkl.Activation('linear')
         return self.get_gan_layer((self.n_lods - 1) - lod)
 
     @abc.abstractmethod
@@ -412,7 +406,7 @@ class SimpleGrowingGanGenerator(GrowingGanGenerator, abc.ABC):
 
         """
         Return a "in-domain" upscale layer between your scales
-        
+
         Example:
 
         self.strides = [2,3,3]
@@ -420,8 +414,8 @@ class SimpleGrowingGanGenerator(GrowingGanGenerator, abc.ABC):
         if len(strides) > 0:
             scale = np.cumprod(strides)[-1]
             if scale > 1:
-                return tfkl.AveragePooling2D((scale, scale), strides=(scale, scale), padding='same')
-        return NOOPLayer()
+                return tfkl.UpSampling2D(size=(scale, scale))
+        return tfkl.Activation('linear')
 
         @param input_idx: starting layer requested 0 ... (n_lods-1)
         @type input_idx: int
@@ -431,7 +425,7 @@ class SimpleGrowingGanGenerator(GrowingGanGenerator, abc.ABC):
 
     def get_upscale_domain_layer_by_lod(self, input_lod, output_lod) -> tfkl.Layer:
         if output_lod == input_lod:
-            return NOOPLayer()
+            return tfkl.Activation('linear')
         input_idx = max((self.n_lods - 1) - output_lod, 0)
         output_idx = max((self.n_lods - 1) - input_lod, 0)
         return self.get_upscale_domain_by_range(input_idx, output_idx)

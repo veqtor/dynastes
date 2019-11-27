@@ -5,7 +5,7 @@ from tensorflow.python.framework import test_util
 from tensorflow_core.python.keras.api._v2.keras import layers as tfkl
 import timeit
 import dynastes as d
-from dynastes.models.growing_gan_models import GrowingGanGenerator, GrowingGanClassifier, NOOPLayer
+from dynastes.models.growing_gan_models import GrowingGanGenerator, GrowingGanClassifier
 
 
 class Simple2DGrowingGanGenerator(GrowingGanGenerator):
@@ -15,7 +15,7 @@ class Simple2DGrowingGanGenerator(GrowingGanGenerator):
                  **kwargs):
         super(Simple2DGrowingGanGenerator, self).__init__(n_lods=n_lods, **kwargs)
         self.gan_layers = [tfkl.UpSampling2D(interpolation='bilinear') for _ in range(n_lods)]
-        self.dom_layers = [NOOPLayer() for _ in range(n_lods + 1)]
+        self.dom_layers = [tfkl.Activation('linear') for _ in range(n_lods + 1)]
 
     def interpolate_domain(self, x, y, interp):
         return x + (y - x) * interp
@@ -24,7 +24,7 @@ class Simple2DGrowingGanGenerator(GrowingGanGenerator):
 
         if lod > (self.n_lods - 1):
             # Return latent
-            return NOOPLayer()
+            return tfkl.Activation('linear')
         return self.gan_layers[(self.n_lods - 1) - lod]
 
     def get_to_domain_layer_by_lod(self, lod) -> tfkl.Layer:
@@ -32,10 +32,10 @@ class Simple2DGrowingGanGenerator(GrowingGanGenerator):
 
     def get_upscale_domain_layer_by_lod(self, input_lod, output_lod) -> tfkl.Layer:
         if output_lod == input_lod:
-            return NOOPLayer()
+            return tfkl.Activation('linear')
         levels = [2] * (output_lod - input_lod)
         if len(levels) == 0:
-            return NOOPLayer()
+            return tfkl.Activation('linear')
         scale = np.cumprod(levels)[-1]
         return tfkl.UpSampling2D(size=(scale, scale))
 
@@ -72,7 +72,7 @@ class Real2DGrowingGanGenerator(GrowingGanGenerator):
 
     def get_gan_layer_by_lod(self, lod) -> tfkl.Layer:
         if lod > (self.n_lods - 1):
-            return NOOPLayer()
+            return tfkl.Activation('linear')
         return self.gan_layers[(self.n_lods - 1) - lod]
 
     def get_to_domain_layer_by_lod(self, lod) -> tfkl.Layer:
@@ -80,10 +80,10 @@ class Real2DGrowingGanGenerator(GrowingGanGenerator):
 
     def get_upscale_domain_layer_by_lod(self, input_lod, output_lod) -> tfkl.Layer:
         if output_lod == input_lod:
-            return NOOPLayer()
+            return tfkl.Activation('linear')
         levels = [2] * (output_lod - input_lod)
         if len(levels) == 0:
-            return NOOPLayer()
+            return tfkl.Activation('linear')
         scale = np.cumprod(levels)[-1]
         return tfkl.UpSampling2D(size=(scale, scale))
 
@@ -124,7 +124,7 @@ class Complex2DGrowingGanGenerator(GrowingGanGenerator):
 
     def get_gan_layer_by_lod(self, lod) -> tfkl.Layer:
         if lod > (self.n_lods - 1):
-            return NOOPLayer()
+            return tfkl.Activation('linear')
         return self.gan_layers[(self.n_lods - 1) - lod]
 
     def get_to_domain_layer_by_lod(self, lod) -> tfkl.Layer:
@@ -132,12 +132,12 @@ class Complex2DGrowingGanGenerator(GrowingGanGenerator):
 
     def get_upscale_domain_layer_by_lod(self, input_lod, output_lod) -> tfkl.Layer:
         if output_lod == input_lod:
-            return NOOPLayer()
+            return tfkl.Activation('linear')
         input_idx = max((self.n_lods - 1) - output_lod, 0)
         output_idx = max((self.n_lods - 1) - input_lod, 0)
         strides = (self.strides)[input_idx : output_idx]
         if len(strides) == 0:
-            return NOOPLayer()
+            return tfkl.Activation('linear')
         scale = np.cumprod(strides)[-1]
         return tfkl.UpSampling2D(size=(scale, scale))
 
@@ -178,14 +178,14 @@ class Simple2DGrowingGanClassifier(GrowingGanClassifier):
         return tfkl.AveragePooling2D((2, 2), strides=(2, 2))
 
     def get_from_domain_layer_by_lod(self, lod) -> tfkl.Layer:
-        return NOOPLayer()
+        return tfkl.Activation('linear')
 
     def get_downscale_domain_layer_by_lod(self, input_lod, output_lod) -> tfkl.Layer:
         if output_lod == input_lod:
-            return NOOPLayer()
+            return tfkl.Activation('linear')
         levels = [2] * (input_lod - output_lod)
         if len(levels) == 0:
-            return NOOPLayer()
+            return tfkl.Activation('linear')
         scale = np.cumprod(levels)[-1]
         return tfkl.AveragePooling2D((scale, scale), strides=(scale, scale))
 
@@ -245,13 +245,13 @@ class Real2DGrowingGanClassifier(GrowingGanClassifier):
 
     def get_downscale_domain_layer_by_lod(self, input_lod, output_lod) -> tfkl.Layer:
         if output_lod == input_lod:
-            return NOOPLayer()
+            return tfkl.Activation('linear')
         levels = [2] * (input_lod - output_lod)
         if len(levels) == 0:
-            return NOOPLayer()
+            return tfkl.Activation('linear')
         scale = np.cumprod(levels)[-1]
         if scale == 1:
-            return NOOPLayer()
+            return tfkl.Activation('linear')
         return tfkl.AveragePooling2D((scale, scale), strides=(scale, scale), padding='same')
 
     def get_input_transform_layer_by_lod(self, lod) -> tfkl.Layer:
@@ -301,13 +301,13 @@ class ComplexGanClassifier(GrowingGanClassifier):
 
     def get_downscale_domain_layer_by_lod(self, input_lod, output_lod) -> tfkl.Layer:
         if output_lod == input_lod:
-            return NOOPLayer()
+            return tfkl.Activation('linear')
         strides = self.strides[self.n_lods - input_lod: self.n_lods - output_lod]
         if len(strides) == 0:
-            return NOOPLayer()
+            return tfkl.Activation('linear')
         scale = np.cumprod(strides)[-1]
         if scale == 1:
-            return NOOPLayer()
+            return tfkl.Activation('linear')
         return tfkl.AveragePooling2D((scale, scale), strides=(scale, scale), padding='same')
 
     def get_input_transform_layer_by_lod(self, lod) -> tfkl.Layer:
